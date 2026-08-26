@@ -6,9 +6,8 @@
   "license": "MIT",
   "type": "module",
   "engines": {
-    "node": ">=22.13"
+    "bun": ">=1.4.0"
   },
-  "packageManager": "pnpm@10.32.1",
   "scripts": {
     "fskintra": "bun apps/cli/src/index.ts",
     "mcp": "bun packages/mcp-server/src/server.ts",
@@ -27,5 +26,12 @@
     "@types/bun": "^1.4.0",
     "@types/node": "^26.2.0",
     "typescript": "^7.0.2"
-  }
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "trustedDependencies": [
+    "@biomejs/biome"
+  ]
 }

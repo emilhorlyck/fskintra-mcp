@@ -1,0 +1,9 @@
+[install]
+# Symlinked node_modules, the way pnpm does it: a package can only import what
+# it actually declares. Catches a missing dependency here rather than in CI.
+linker = "isolated"
+
+# Don't install anything published in the last two days — a supply-chain safety
+# net. A maliciously published version usually gets reported and yanked well
+# inside that window. (pnpm counts this in minutes; Bun counts seconds.)
+minimumReleaseAge = 172800

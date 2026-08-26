@@ -10,8 +10,8 @@ Two transports. Pick by how the agent runs.
 ## Log in first
 
 ```bash
-pnpm fskintra login
-pnpm fskintra doctor      # confirm the sections actually parse
+bun run fskintra login
+bun run fskintra doctor      # confirm the sections actually parse
 ```
 
 The MCP server reads the same session store the CLI writes, so this works

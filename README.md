@@ -25,9 +25,9 @@ Two projects, two different debts:
 ## Quick start
 
 ```bash
-pnpm install
-pnpm fskintra login
-pnpm fskintra doctor        # does anything actually parse?
+bun install
+bun run fskintra login
+bun run fskintra doctor        # does anything actually parse?
 ```
 
 Then wire it into an agent — see [`examples/claude-config`](examples/claude-config):
@@ -43,7 +43,7 @@ half-working.
 ## Start with `doctor`
 
 ```
-$ pnpm fskintra doctor
+$ bun run fskintra doctor
 • Store backend: macOS Keychain
 ✓ Logged in to minskole.skoleintra.dk as emil
 • Message UI: conversations
@@ -175,8 +175,8 @@ school out loud.
 
 ```bash
 bun test          # 91 tests, no network
-pnpm typecheck
-pnpm lint
+bun run typecheck
+bun run lint
 ```
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) — particularly the part about keeping

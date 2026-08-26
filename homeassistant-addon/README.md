@@ -23,7 +23,7 @@ by anyone with admin access to your HA instance.
 **Copy a session** (keeps the password off HA). On a workstation:
 
 ```bash
-FSKINTRA_MCP_NO_KEYCHAIN=1 pnpm fskintra login --no-store-password
+FSKINTRA_MCP_NO_KEYCHAIN=1 bun run fskintra login --no-store-password
 ```
 
 Then copy `~/.config/fskintra-mcp/session.json` and `.key` into

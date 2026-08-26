@@ -3,13 +3,21 @@
 ## Setup
 
 ```bash
-pnpm install     # pnpm resolves the workspace and owns the lockfile
-bun test         # Bun runs the tests; there is no build step
-pnpm typecheck   # tsc is the type-checker, not the runtime
-pnpm lint        # biome
+bun install         # workspace resolution, lockfile, and the install itself
+bun test            # no build step; Bun runs .ts directly
+bun run typecheck   # tsc is the type-checker, not the runtime
+bun run lint        # biome
 ```
 
-Node 22+ is installed only so `tsc` can run. Everything else executes under Bun.
+Bun 1.4+ is the only prerequisite. No Node, no second package manager.
+
+`bunfig.toml` sets two things worth knowing about:
+
+- `linker = "isolated"` — symlinked `node_modules`, so a package can only
+  import what it declares. A forgotten dependency fails here, not in CI.
+- `minimumReleaseAge` — nothing published in the last two days gets installed.
+  If you add a dependency that was released this morning, that is why it
+  won't resolve.
 
 ## The one thing to know before changing a parser
 

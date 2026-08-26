@@ -33,20 +33,43 @@ apart means a bug report usually lands in one package without reading the
 others, and the auth package stays reusable by anyone who wants an
 authenticated ForældreIntra session without buying into MCP.
 
-## Why Bun + pnpm
+## Why Bun alone
 
-`packageManager` is `pnpm@10.32.1`. Tests and dev scripts run under Bun.
+Bun is the package manager, the test runner and the runtime. There is no Node
+in the toolchain and no second package manager.
 
-- **pnpm installs.** Workspace resolution, the lockfile CI freezes against,
-  hoisting policy.
-- **Bun runs.** It executes `.ts` directly, so there is no build step, and
-  `bun test` runs the suite without a transpiler or a config file.
+This is a deliberate divergence from aula-mcp, which splits the two: pnpm
+installs, Bun runs, and its architecture doc justifies that with "Bun's
+installer doesn't yet match pnpm's strictness for this workspace". That was
+true when it was written. On Bun 1.4 the four things pnpm was there for have
+all landed:
 
-Node 22+ exists only so `tsc --noEmit` can run. TypeScript is the type-checker
-here, not the runtime.
+| Needed | Bun 1.4 |
+|---|---|
+| Strict, no-phantom-dependency layout | `linker = "isolated"` |
+| A lockfile CI can freeze against | `--frozen-lockfile`, `bun.lock` |
+| Supply-chain publish delay | `minimumReleaseAge` |
+| Workspaces and `workspace:*` | supported |
 
-Straight from aula-mcp, and for the same mechanical reason: use the tool that's
-best at each job.
+The first two live in `bunfig.toml`; the lockfile and workspaces need no
+configuration. One unit trap worth knowing: pnpm counts `minimumReleaseAge` in
+minutes, Bun counts it in seconds, so the same two-day window is `172800` here
+rather than `2880`.
+
+`tsc --noEmit` runs under Bun too, so TypeScript stays the type-checker without
+dragging a runtime along behind it.
+
+### What this costs
+
+Dependabot's Bun support covers version updates but not security updates, and
+there is an open bug where its updater image ships an older Bun that cannot read
+a `lockfileVersion 2` `bun.lock` and silently rewrites it as v1. `pnpm-lock.yaml`
+has better coverage today.
+
+That is a real trade, taken knowingly: for a repo one family runs against one
+school, a single toolchain is worth more than automated security bumps. If this
+ever grows a userbase, moving installs back to pnpm is a `bunfig.toml` deletion
+and a CI step — the layering above does not depend on it.
 
 ## Why we own the HTTP flow
 

@@ -1,5 +1,5 @@
 build_from:
-  amd64: node:24-bookworm-slim
-  aarch64: node:24-bookworm-slim
+  amd64: oven/bun:1.4-debian
+  aarch64: oven/bun:1.4-debian
 args:
   FSKINTRA_MCP_REF: main

@@ -28,7 +28,7 @@ backend. Two ways to get credentials in, with a real trade-off:
 anyone with admin access to your HA instance.
 
 **Copy a session.** Log in on a workstation with
-`FSKINTRA_MCP_NO_KEYCHAIN=1 pnpm fskintra login --no-store-password`, then copy
+`FSKINTRA_MCP_NO_KEYCHAIN=1 bun run fskintra login --no-store-password`, then copy
 `session.json` and `.key` into `/config/fskintra-mcp/`. The password never
 reaches HA — but neither can the add-on renew the session when it expires, and
 it will, silently, until someone notices Assist has gone quiet.

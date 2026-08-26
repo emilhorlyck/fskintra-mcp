@@ -12,28 +12,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # The pnpm version comes from package.json's "packageManager" field.
-      # Don't also set `version` here — the action errors with
-      # ERR_PNPM_BAD_PM_VERSION when both are specified.
-      - uses: pnpm/action-setup@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: 1.4.0
 
+      # `--frozen-lockfile` is the whole point of committing bun.lock: CI fails
+      # on a lockfile that doesn't match package.json rather than quietly
+      # resolving something else.
       - name: Install
-        run: pnpm install --frozen-lockfile
+        run: bun install --frozen-lockfile
 
       - name: Typecheck
-        run: pnpm typecheck
+        run: bun run typecheck
 
       - name: Lint
-        run: pnpm lint
+        run: bun run lint
 
       - name: Test
         run: bun test
