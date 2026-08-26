@@ -1,0 +1,30 @@
+{
+  "name": "fskintra-mcp",
+  "version": "0.1.0",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/server.ts",
+    "probe": "tsx src/probe.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.test.json",
+    "test": "node --import tsx --test test/*.test.ts"
+  },
+  "author": "",
+  "license": "MIT",
+  "description": "MCP server for ForældreIntra (SkoleIntra)",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "cheerio": "^1.2.0",
+    "tough-cookie": "^6.0.2",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.3.0",
+    "tsx": "^4.23.12",
+    "typescript": "^7.0.2"
+  },
+  "type": "module",
+  "private": true,
+  "bin": {
+    "fskintra-mcp": "dist/server.js"
+  }
+}
