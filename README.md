@@ -1,110 +1,183 @@
 # fskintra-mcp
 
-An MCP server for **ForældreIntra** (SkoleIntra) — logs in as a parent and exposes news,
-messages, weekly plans, homework, documents, photos, contacts and sign-ups as tools.
+An MCP server for **ForældreIntra** (SkoleIntra) — logs in as a parent and
+exposes news, messages, weekly plans, homework, documents, photos, contacts and
+sign-ups as tools an AI agent can call.
 
-ForældreIntra has no public API, so this scrapes the site. The URL map, login flow and DOM
-selectors are ported from [svalgaard/fskintra](https://github.com/svalgaard/fskintra), a
-long-running Python 2 tool that turns ForældreIntra into email. Nothing of that code is
-reused directly — it is the reverse-engineering that carries over.
+Unofficial and third-party. Not affiliated with itslearning.
 
-Unofficial and third-party: not affiliated with itslearning.
+## Where this comes from
 
-## Setup
+Two projects, two different debts:
 
-```bash
-npm install
-npm run build
-```
+- **[svalgaard/fskintra](https://github.com/svalgaard/fskintra)** — a long-running
+  Python tool that turns ForældreIntra into email. None of its code is reused
+  (it is Python 2 on `mechanize`), but it is the only written-down description
+  of ForældreIntra's login flow, URL map and DOM selectors that exists. That
+  reverse-engineering is what this project stands on.
+- **[Casperjuel/aula-mcp](https://github.com/Casperjuel/aula-mcp)** — the same
+  problem solved for Aula. The architecture here is deliberately borrowed from
+  it: layered packages, encrypted credential store, wire-tracing with
+  redaction, a `discover`-first tool surface, and a `doctor` command.
+  [`docs/architecture.md`](docs/architecture.md) says which parts transferred
+  unchanged and which ForældreIntra forced a different answer to.
 
-Configuration is environment-only:
-
-| Variable | Required | Meaning |
-|---|---|---|
-| `FSKINTRA_HOSTNAME` | yes | Your school's host, e.g. `minskole.skoleintra.dk`. A full URL is accepted too. |
-| `FSKINTRA_USERNAME` | yes | ForældreIntra username |
-| `FSKINTRA_PASSWORD` | yes | ForældreIntra password |
-| `FSKINTRA_STATE_DIR` | no | Where cookies are cached. Default `~/.fskintra-mcp` (files written `0600`). |
-| `FSKINTRA_DEBUG` | no | `1` to log every request to stderr |
-| `FSKINTRA_AUTO_CONFIRM_CONTACTS` | no | `1` to auto-submit the "Bekræft kontaktoplysninger" page. See below. |
-
-Only ordinary ForældreIntra login ("alm login") is supported. If your school redirects to
-UNI-Login, the server fails with an explicit error rather than half-working.
-
-## Verify against your school first
+## Quick start
 
 ```bash
-FSKINTRA_HOSTNAME=minskole.skoleintra.dk \
-FSKINTRA_USERNAME=... FSKINTRA_PASSWORD=... \
-npm run probe -- --dump /tmp/fskintra-dump
+pnpm install
+pnpm fskintra login
+pnpm fskintra doctor        # does anything actually parse?
 ```
 
-This logs in, lists your children and reports OK/FAIL per section. `--dump` saves the parsed
-output and the front-page HTML so selectors can be corrected when a section fails — schools
-enable different modules, and the markup drifts.
-
-## Register with Claude Code
+Then wire it into an agent — see [`examples/claude-config`](examples/claude-config):
 
 ```bash
-claude mcp add foraldreintra \
-  --env FSKINTRA_HOSTNAME=minskole.skoleintra.dk \
-  --env FSKINTRA_USERNAME=... \
-  --env FSKINTRA_PASSWORD=... \
-  -- node /Users/emil/dev/fskintra-mcp/dist/server.js
+claude mcp add foraldreintra -- bun $PWD/packages/mcp-server/src/server-stdio.ts
 ```
+
+Only ordinary ForældreIntra login ("alm login") is supported. If your school
+redirects to UNI-Login, the client stops with an explicit error rather than
+half-working.
+
+## Start with `doctor`
+
+```
+$ pnpm fskintra doctor
+• Store backend: macOS Keychain
+✓ Logged in to minskole.skoleintra.dk as emil
+• Message UI: conversations
+• Children: Andrea 3A, Bertil 6B
+
+──────────────────────────────────────── Andrea 3A
+✓ news        child=Andrea 3A reminders=1 news=6 (412ms)
+✓ messages    12 item(s) (233ms)
+! weekplans   ForældreIntra says "ikke autoriseret".
+✓ homework    2 item(s) (890ms)
+✓ documents   14 item(s) (301ms)
+```
+
+Three outcomes, and the difference between the last two is the point:
+
+| Mark | Meaning |
+|---|---|
+| ✓ | Parsed |
+| ! | Your school does not have this module |
+| ✗ | A parser bug — please file it |
+
+Add `--debug` for a sanitised wire transcript, and `--dump <dir>` to save what
+each section parsed.
 
 ## Tools
 
+Agents should call `foraldreintra.discover` **once** and work from the manifest:
+it returns the children, which sections this school actually has, and which
+message UI it runs.
+
 | Tool | What it does |
 |---|---|
-| `foraldreintra_list_children` | Children on the account. Call first — every other tool takes `child`. |
-| `foraldreintra_get_news` | Front-page news with author, recipients, date, body, attachments; comments optional |
-| `foraldreintra_list_messages` | Conversation list with thread/message ids |
-| `foraldreintra_get_message` | Every message in one conversation |
-| `foraldreintra_mark_message_read` | Marks read/unread — **writes state the school can see** |
-| `foraldreintra_get_weekplans` | Weekly plans broken down per day |
-| `foraldreintra_get_homework` | Homework grouped by due date |
-| `foraldreintra_list_documents` | Class documents incl. sub-folders |
-| `foraldreintra_get_photos` | Photo albums and image URLs |
-| `foraldreintra_get_contacts` | Contact cards for the class |
-| `foraldreintra_get_signups` | Open sign-ups for conversations and events |
-| `foraldreintra_download` | Saves an attachment to a local path using the session |
-| `foraldreintra_reauthenticate` | Drops the cached session and logs in again |
+| `foraldreintra.discover` | Children, per-section availability, capability→tool map |
+| `foraldreintra.news` | Front-page news with author, recipients, date, attachments; comments optional |
+| `foraldreintra.messages.list` | Conversation list with thread/message ids |
+| `foraldreintra.messages.get` | Every message in one conversation |
+| `foraldreintra.weekplans` | Weekly plans, per day |
+| `foraldreintra.homework` | Homework grouped by due date |
+| `foraldreintra.documents` | Class documents including sub-folders |
+| `foraldreintra.photos` | Photo albums and image URLs |
+| `foraldreintra.contacts` | Contact cards for the class |
+| `foraldreintra.signups` | Open sign-ups for conversations and events |
+| `foraldreintra.download` | Saves an attachment to a local path |
+| `foraldreintra.reauthenticate` | Fresh login, discarding the cached session |
 
-Everything except `mark_message_read`, `download` and `reauthenticate` is read-only.
+Behind flags: `foraldreintra.messages.mark_read` (`FSKINTRA_MCP_WRITE=1`) and
+`foraldreintra.raw_request` (`FSKINTRA_MCP_RAW=1`). **The server is read-only
+without them.**
 
-## How it works
+## CLI
 
-- `src/session.ts` — cookie-jar HTTP client. Redirects are followed **manually**, because
-  `fetch`'s automatic redirect handling drops cookies set on intermediate SSO hops. Cookies
-  and the discovered front-page URL persist to `FSKINTRA_STATE_DIR` so restarts skip login.
-- `src/login.ts` — the login state machine: `/Account/IdpLogin` → credentials POST → SSO
-  relay auto-submits → `/parent/<id>/<name>/Index`. Handles the periodic "confirm your
-  contact details" interstitial, and retries once from scratch when a cached session expires.
-- `src/children.ts` — children are discovered by scraping links matching
-  `^(/[^/]*){3}/Index$`; the selected child's name only appears in `#sk-personal-menu-button`.
-- `src/pages/*.ts` — one module per section. Each returns plain data, not HTML.
+```
+fskintra login [--hostname H] [--username U] [--debug] [--no-store-password]
+fskintra status | whoami | logout
+fskintra doctor [--json] [--debug] [--dump DIR]
+fskintra discover
+fskintra fetch <section> [--child NAME] [--limit N] [--comments]
+fskintra thread <message-id> [--thread THREAD_ID]
+fskintra log [--last N]
+fskintra transcript list | view <file> | prune [--keep N]
+```
 
-### The contact-details page
+## How it fits together
 
-ForældreIntra periodically blocks login with "Bekræft kontaktoplysninger". Confirming is a
-change the school sees, so by default the server refuses and shows you the page text.
-Confirm once in a browser, or set `FSKINTRA_AUTO_CONFIRM_CONTACTS=1`.
+```
+fskintra-auth  →  fskintra-client  →  mcp-server
+                                          ↑
+                                       apps/cli
+```
+
+- **`packages/fskintra-auth`** — cookie-jar HTTP client with manual redirect
+  walking, the login state machine, wire tracing, and the encrypted session
+  store (Keychain on macOS, AES-256-GCM file elsewhere).
+- **`packages/fskintra-client`** — one module per section, plus the
+  section-availability probe. Every parser has a pure `Doc → data` function.
+- **`packages/mcp-server`** — tools, `discover`, and both transports.
+- **`apps/cli`** — `fskintra`.
+
+Three decisions worth knowing before you read the code:
+
+**Redirects are followed by hand.** `fetch` doesn't expose `Set-Cookie` from
+intermediate hops, and the SSO relay sets cookies there.
+
+**The stored session includes your password.** ForældreIntra has no refresh
+token; replaying the login form is the only way to renew a dead session. That is
+why the store is encrypted. `--no-store-password` opts out, at the cost of
+needing you present at every expiry.
+
+**"Unavailable" and "empty" are different types.** A school without homework
+answers *"ikke autoriseret"*. An agent handed an empty array tells a parent
+"no homework this week", which would be false.
+
+Full reasoning in [`docs/architecture.md`](docs/architecture.md).
+
+## Configuration
+
+| Variable | Effect |
+|---|---|
+| `FSKINTRA_MCP_DIR` | Config dir (default `~/.config/fskintra-mcp`) |
+| `FSKINTRA_MCP_KEY` | Encryption key (64 hex chars) or passphrase for the file backend |
+| `FSKINTRA_MCP_NO_KEYCHAIN=1` | Use the encrypted file instead of the macOS Keychain |
+| `FSKINTRA_MCP_LOG=1` | Verbose logs (stderr under stdio) |
+| `FSKINTRA_MCP_WRITE=1` | Register write tools |
+| `FSKINTRA_MCP_RAW=1` | Register the raw page-fetch escape hatch |
+| `FSKINTRA_MCP_AUTO_CONFIRM_CONTACTS=1` | Submit the "Bekræft kontaktoplysninger" form automatically |
+| `FSKINTRA_MCP_PORT` / `_HOST` | HTTP server bind (default `127.0.0.1:7979`) |
+| `FSKINTRA_MCP_ALLOW_REMOTE=1` | Permit a non-loopback bind (refused otherwise) |
+| `FSKINTRA_HOSTNAME` / `_USERNAME` / `_PASSWORD` | Credentials for headless installs, instead of `fskintra login` |
+
+## Home Assistant
+
+There is an add-on: [`homeassistant-addon/`](homeassistant-addon/README.md).
+Point HA's Model Context Protocol integration at
+`http://homeassistant.local:7979/sse` and Assist can answer questions about
+school out loud.
 
 ## Known limits
 
-- **Selectors are a moving target.** Sections fail independently; a failure in one does not
-  break the others. Re-run the probe with `--dump` after a ForældreIntra update.
+- **Nothing here has run against a live ForældreIntra yet.** Every selector is
+  ported from a codebase that froze years ago. `fskintra doctor` is the
+  first move.
 - **UNI-Login is not supported.**
-- **Old vs new message UI.** Schools run one of two message interfaces; the server sniffs
-  which from the "Besked" menu link. The new one reads a JSON blob out of a data attribute;
-  the old one scrapes inbox/outbox pages. The old path is the less-tested of the two.
-- **No sending.** Reading only — the server cannot write messages or sign up for events.
+- **Read-only.** No sending messages, no signing up for events.
+- **The old message UI is the less-tested of the two.**
+- **Selectors are a moving target.** Sections fail independently; one broken
+  parser doesn't take the others down.
 
 ## Development
 
 ```bash
-npm test        # parser unit tests, no network
-npm run typecheck
-npm run build
+bun test          # 91 tests, no network
+pnpm typecheck
+pnpm lint
 ```
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) — particularly the part about keeping
+"unavailable" and "broken" apart when you touch a parser.

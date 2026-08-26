@@ -1,0 +1,7 @@
+{
+  ".": "0.1.0",
+  "apps/cli": "0.1.0",
+  "packages/fskintra-auth": "0.1.0",
+  "packages/fskintra-client": "0.1.0",
+  "packages/mcp-server": "0.1.0"
+}

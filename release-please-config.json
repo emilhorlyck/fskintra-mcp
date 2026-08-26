@@ -1,0 +1,28 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "release-type": "node",
+  "include-component-in-tag": false,
+  "separate-pull-requests": false,
+  "bump-minor-pre-major": true,
+  "bump-patch-for-minor-pre-major": false,
+  "plugins": [
+    {
+      "type": "linked-versions",
+      "groupName": "fskintra-mcp",
+      "components": [
+        "fskintra-mcp",
+        "@fskintra-mcp/cli",
+        "@fskintra-mcp/fskintra-auth",
+        "@fskintra-mcp/fskintra-client",
+        "@fskintra-mcp/mcp-server"
+      ]
+    }
+  ],
+  "packages": {
+    ".": { "package-name": "fskintra-mcp" },
+    "apps/cli": { "package-name": "@fskintra-mcp/cli" },
+    "packages/fskintra-auth": { "package-name": "@fskintra-mcp/fskintra-auth" },
+    "packages/fskintra-client": { "package-name": "@fskintra-mcp/fskintra-client" },
+    "packages/mcp-server": { "package-name": "@fskintra-mcp/mcp-server" }
+  }
+}

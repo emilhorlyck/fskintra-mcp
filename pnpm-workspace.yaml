@@ -1,0 +1,10 @@
+packages:
+  - "packages/*"
+  - "apps/*"
+
+# Block packages newer than 2 days — supply-chain safety net. A maliciously
+# published version typically gets reported and yanked well inside this window.
+minimumReleaseAge: 2880
+
+onlyBuiltDependencies:
+  - "@biomejs/biome"

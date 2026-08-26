@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "foraldreintra": {
+      "command": "bun",
+      "args": ["/path/to/fskintra-mcp/packages/mcp-server/src/server-stdio.ts"],
+      "env": {
+        "FSKINTRA_MCP_LOG": "0"
+      }
+    }
+  }
+}

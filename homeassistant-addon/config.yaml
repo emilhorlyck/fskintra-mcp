@@ -1,0 +1,39 @@
+name: fskintra-mcp
+version: "0.1.0"
+slug: fskintra_mcp
+description: >-
+  MCP server for ForældreIntra (SkoleIntra). Exposes news, messages, weekly
+  plans, homework, documents, photos, contacts and sign-ups as MCP tools that
+  HA's Assist conversation agent (Anthropic / OpenAI / Ollama / …) can call,
+  including via Voice. Point HA's official `mcp` (client) integration at
+  http://homeassistant.local:7979/sse after install.
+url: "https://github.com/emilhein/fskintra-mcp"
+arch:
+  - amd64
+  - aarch64
+init: false
+boot: auto
+startup: services
+host_network: false
+ports:
+  7979/tcp: 7979
+ports_description:
+  7979/tcp: fskintra-mcp HTTP (/mcp) + SSE (/sse)
+map:
+  - homeassistant_config:rw
+panel_icon: mdi:school
+panel_title: fskintra-mcp
+options:
+  hostname: ""
+  username: ""
+  password: ""
+  fskintra_mcp_key: ""
+  log: false
+  allow_remote: true
+schema:
+  hostname: "str?"
+  username: "str?"
+  password: "password?"
+  fskintra_mcp_key: "password?"
+  log: bool
+  allow_remote: bool
