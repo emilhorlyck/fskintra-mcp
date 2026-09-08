@@ -11,13 +11,20 @@
  * on, and you get a login that succeeds into zero children.
  *
  * A child link is three path segments followed by `/Index`, e.g.
- * `/parent/1234/Andrea/Index`. It may be an absolute URL or a bare path, and
- * may carry a trailing slash. This is the permissive, canonical form; both
- * layers use it and nothing else.
+ * `/parent/1234/Andrea/Index`. It may be an absolute URL or a bare path, may
+ * carry a trailing slash, and may carry a `?query` or `#fragment`. This is the
+ * permissive, canonical form. Login also accepts a front page by its URL shape
+ * (`INDEX_RE`) as an early check; this predicate is the content-based test both
+ * layers share for everything else.
  */
 const CHILD_LINK_RE = /^(?:https?:\/\/[^/]+)?(?:\/[^/]*){3}\/Index\/?$/i;
 
 /** Is this href a link to a child's front page? */
 export function isChildLink(href: string | undefined | null): boolean {
-  return href != null && CHILD_LINK_RE.test(href);
+  if (href == null) return false;
+  // Match on the path alone; a real href may carry ?query or #fragment, and
+  // login (which checks the URL) and the client (which scrapes hrefs) must
+  // agree on the same page regardless.
+  const pathOnly = href.split(/[?#]/, 1)[0] ?? href;
+  return CHILD_LINK_RE.test(pathOnly);
 }

@@ -220,8 +220,9 @@ form already stamped `RoleType=Parent`:
      → idp.m.skoleintra.dk/sso/ssoservice?SAMLRequest=… → <school>.m.skoleintra.dk/Account/IdpLogin?role=Parent
 ```
 
-So `ENTRY_PATHS` tries `/Fi/` first and `/Account/IdpLogin` second, treating a
-404 as "not this door" rather than as failure. Asking for the front door first
+So `ENTRY_PATHS` tries `/Fi/` first and `/Account/IdpLogin` second, treating any
+error status (a 404, but also a 403/410) as "not this door" rather than as
+failure. Asking for the front door first
 also gets the role right: entering at the school host's root would pick up
 `roleType=Teacher`, which is a login a parent cannot complete.
 
@@ -274,8 +275,12 @@ alone re-submits credentials into a form with no username field.
 The fix distinguishes an *explicit* relay (a form named `relay`, or a page under
 `/sso/ssocomplete` — the two shapes fskintra actually observed) from a lone
 unnamed form. Explicit relays are followed first; the generic single-form case
-is tried only after every known branch is ruled out, because the login page is
-also a lone form.
+is tried only after every known branch is ruled out — including the child-link
+front-page test, because a real ASP.NET front page wraps its whole body in one
+`<form>` and would otherwise be submitted back to the school. The generic relay
+is also never followed on an error status, where a stray form is a dead landing
+rather than a relay. The login page is a lone form too, which is the other
+reason this case comes last.
 
 ## Read-only by default
 

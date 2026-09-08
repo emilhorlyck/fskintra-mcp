@@ -141,13 +141,14 @@ export class FskintraLoginClient {
       return undefined;
     }
 
-    if (response.status !== 200 || !this.isFrontPage(parse(response.body), new URL(response.url))) {
+    const doc = parse(response.body);
+    if (response.status !== 200 || !this.isFrontPage(doc, new URL(response.url))) {
       this.logger.info('login.resume_rejected', { url: response.url, status: response.status });
       return undefined;
     }
 
     return {
-      doc: parse(response.body),
+      doc,
       indexUrl: response.url,
       cookies: await this.http.jar.serialize(),
     };
@@ -170,7 +171,8 @@ export class FskintraLoginClient {
         status: response.status,
       });
 
-      if (response.body.length > 0 && this.isFrontPage(doc, url)) {
+      // A front page by its URL shape is unambiguous — accept it early.
+      if (response.body.length > 0 && INDEX_RE.test(url.pathname)) {
         this.logger.info('login.success', { indexUrl: response.url });
         return {
           doc,
@@ -183,19 +185,10 @@ export class FskintraLoginClient {
         throw new UniLoginNotSupportedError(url.hostname);
       }
 
-      // An error status this far in is not a failed login: the SAML assertion
-      // has been consumed and the session cookies are set. It means the return
-      // URL the flow carried around — `/Fi/`, usually — is not a page this
-      // installation serves. Ask the site where the user belongs instead.
-      if (response.status >= 400) {
-        const recovered = await this.followLandingFallback(response, hostname, triedLandings);
-        if (recovered) {
-          response = recovered;
-          continue;
-        }
-        break;
-      }
-
+      // Actionable interstitials come first. Each is rendered inside the site
+      // chrome, which carries the child-switcher nav — so the link-based
+      // front-page test below would swallow them if it ran first. Order is
+      // load-bearing: ConfirmContacts, then relay, then the login form.
       if (/\/ConfirmContacts\/?$/i.test(url.pathname)) {
         response = await this.handleConfirmContacts(doc, response.url);
         continue;
@@ -222,7 +215,25 @@ export class FskintraLoginClient {
         continue;
       }
 
-      if (relay) {
+      // A front page can live at a URL INDEX_RE has never heard of, recognised
+      // by the child links it carries — the same links the client scrapes off
+      // it a moment later. This must come BEFORE the generic single-form relay
+      // below: a real ASP.NET front page wraps its whole body in one <form>,
+      // which findRelayForm would otherwise submit back to the school's site.
+      if (response.body.length > 0 && this.hasChildLinks(doc)) {
+        this.logger.info('login.success', { indexUrl: response.url });
+        return {
+          doc,
+          indexUrl: response.url,
+          cookies: await this.http.jar.serialize(),
+        };
+      }
+
+      // A lone, unnamed form is tried as a relay only after every known branch
+      // is ruled out (fskintra orders it this way, because the login page is
+      // also a lone form). Never on an error page: a 4xx/5xx rendered in site
+      // chrome with a stray form is a dead landing, not a relay to follow.
+      if (relay && response.status < 400) {
         this.logger.debug('login.relay_generic', { action: relay.action || response.url });
         response = (
           await this.http.follow(new URL(relay.action || response.url, response.url).toString(), {
@@ -233,9 +244,12 @@ export class FskintraLoginClient {
         continue;
       }
 
-      // Nothing on this page is actionable and it is not the front page. Same
-      // recovery as the error case, for the installation that answers a dead
-      // return URL with a 200 and a page of chrome.
+      // Nothing here is actionable and it is not the front page. If the flow
+      // returned an error status the SAML assertion has still been consumed
+      // and the cookies set — the carried return URL (`/Fi/`, usually) is just
+      // a page this installation does not serve. Either way, ask the site
+      // where the user belongs. followLandingFallback tries each root once, so
+      // a root that is itself a dead end fails the login rather than looping.
       const recovered = await this.followLandingFallback(response, hostname, triedLandings);
       if (!recovered) break;
       response = recovered;
@@ -270,7 +284,10 @@ export class FskintraLoginClient {
         continue;
       }
 
-      if (response.status === 404 || response.status >= 500) {
+      if (response.status >= 400) {
+        // Any error here means "not this door", not "login impossible" — try
+        // the next entry path. The loop's post-assertion recovery cannot apply
+        // at round 0: no SAML assertion has been exchanged yet.
         attempts.push(`${url} → HTTP ${response.status}`);
         this.logger.debug('login.entry_missing', { url, status: response.status });
         continue;
@@ -302,12 +319,17 @@ export class FskintraLoginClient {
   }
 
   /**
-   * Is this the logged-in front page? By URL first, by the child links it
-   * carries second. Both tests, rather than the URL alone, because the URL
-   * varies per installation and the links are what the page is *for*.
+   * Is this the logged-in front page? By URL shape first, by the child links
+   * it carries second. Used by `resume`, where either signal is enough to
+   * trust a restored session.
    */
   private isFrontPage(doc: Doc, url: URL): boolean {
     if (INDEX_RE.test(url.pathname)) return true;
+    return this.hasChildLinks(doc);
+  }
+
+  /** Does the page carry at least one child link? The content-only test. */
+  private hasChildLinks(doc: Doc): boolean {
     return doc('a[href]')
       .toArray()
       .some((el) => isChildLink(doc(el).attr('href')));

@@ -342,7 +342,10 @@ export function parseChildren(doc: Doc, absUrl: (url: string) => string): Child[
     const href = doc(el).attr('href');
     if (!href || !isChildLink(href)) return;
 
-    const urlPrefix = absUrl(href.replace(/\/Index\/?$/i, ''));
+    // Strip /Index and any ?query/#fragment before forming the section prefix.
+    // Uses [\s\S] not . so a newline in a query can't survive, matching how
+    // isChildLink splits — the two must never disagree about the same href.
+    const urlPrefix = absUrl(href.replace(/\/Index\/?(?:[?#][\s\S]*)?$/i, ''));
     if (byPrefix.has(urlPrefix)) return;
 
     const name = doc(el).text().replace(/\s+/g, ' ').trim() || selectedName;

@@ -16,6 +16,21 @@ describe('isChildLink', () => {
     expect(isChildLink('/parent/1234/Andrea/Index/')).toBe(true);
   });
 
+  // Regression (review #6): the module's contract is that login and the client
+  // never disagree about a page. A child link with a query string or fragment
+  // must be accepted, or a front page login accepts yields zero children.
+  test('accepts a child link carrying a query string', () => {
+    expect(isChildLink('/parent/1234/Andrea/Index?SchoolId=3')).toBe(true);
+  });
+
+  test('accepts a child link carrying a fragment', () => {
+    expect(isChildLink('/parent/1234/Andrea/Index#top')).toBe(true);
+  });
+
+  test('accepts an absolute child link with a query string', () => {
+    expect(isChildLink('https://skole.skoleintra.dk/parent/1234/Andrea/Index?x=1')).toBe(true);
+  });
+
   test('is case-insensitive on the Index segment', () => {
     expect(isChildLink('/parent/1234/Andrea/index')).toBe(true);
   });
