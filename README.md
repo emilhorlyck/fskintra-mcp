@@ -4,7 +4,44 @@ An MCP server for **ForældreIntra** (SkoleIntra) — logs in as a parent and
 exposes news, messages, weekly plans, homework, documents, photos, contacts and
 sign-ups as tools an AI agent can call.
 
-Unofficial and third-party. Not affiliated with itslearning.
+**What this is — and what it is *not*:**
+
+`fskintra-mcp` is a server that sits between an MCP client (an LLM) and
+ForældreIntra. It is an interface, not much more. **The LLM is not part of this
+project.** You pick the client yourself — Claude Code, Claude Desktop, ChatGPT,
+Cursor, Ollama, LM Studio — and it runs wherever it runs: in Anthropic's or
+OpenAI's cloud, or locally if you use Ollama or similar.
+
+**So this project is not a guarantee that your children's data stays local.**
+Whether it does depends entirely on which client you connect. That is your
+call, not something `fskintra-mcp` can promise.
+
+> ⚠️ **Use it with care**
+>
+> A hobby experiment, no guarantees. It handles your ForældreIntra password and
+> your children's school data — read the code (or have a developer friend read
+> it) before you point an LLM at it. At your own risk.
+
+> ⚠️ **It's the client that sees the data — not the server**
+>
+> The server runs locally and forwards nothing on its own. **But the MCP client
+> you connect — Claude, ChatGPT, any other cloud LLM — gets everything it reads
+> sent on to the provider (Anthropic, OpenAI, …) so it can answer you.** It is
+> not "all local" just because the server is. That is how MCP works: the client
+> reasons, the server fetches.
+>
+> | | Where it goes |
+> | --- | --- |
+> | ForældreIntra username and password | Stays local — macOS Keychain or an AES-256-GCM encrypted file. Used only to log in to ForældreIntra. |
+> | The data itself (messages, weekly plans, children's names, photos, …) | Goes to whichever MCP client you choose. Cloud LLM → that provider's servers (typically the US). Local LLM → stays local. |
+>
+> **Want it 100 % local?** Use a local LLM as the client:
+> [Ollama](https://ollama.com), [LM Studio](https://lmstudio.ai),
+> [llama.cpp](https://github.com/ggml-org/llama.cpp). They all speak MCP and run
+> on your own hardware.
+
+Unofficial and third-party. Not affiliated with itslearning — see
+[Privacy & legal](#privacy--legal).
 
 ## Where this comes from
 
@@ -181,3 +218,24 @@ bun run lint
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) — particularly the part about keeping
 "unavailable" and "broken" apart when you touch a parser.
+
+## Privacy & legal
+
+Your ForældreIntra username and password stay on your machine. The HTTP server
+binds to `127.0.0.1` by default and refuses a non-loopback bind unless you set
+`FSKINTRA_MCP_ALLOW_REMOTE=1`. No telemetry. The wire trace is opt-in
+(`--debug`), and every known-secret field is redacted before anything is written
+to disk.
+
+The data itself — messages, weekly plans, children's names, photos — is passed
+on to whichever MCP client you connect. Where that client sends it is the
+client's business, not the server's; see the disclaimer at the top.
+
+Use this for your own children's data — log in as yourself with your own
+ForældreIntra account. Do not use it to reach anyone else's account.
+
+> **Disclaimer.** This project is not affiliated with, endorsed by or sponsored
+> by itslearning AS, UNI-C, or any Danish school or municipality.
+> *SkoleIntra* and *ForældreIntra* are trademarks of their respective owners;
+> the names are used here solely to identify what this software talks to.
+> Provided "as is", without warranty of any kind — see [LICENSE](LICENSE).
