@@ -6,7 +6,7 @@ Voice) can answer "hvad har Andrea for til på mandag?".
 ## Install
 
 1. **Settings → Add-ons → Add-on Store → ⋮ → Repositories**, add
-   `https://github.com/emilhein/fskintra-mcp`.
+   `https://github.com/emilhorlyck/fskintra-mcp`.
 2. Install **fskintra-mcp**, then open its **Configuration** tab.
 3. Fill in `hostname`, `username` and `password`, or leave them blank and copy
    a session in by hand (below). Start the add-on.

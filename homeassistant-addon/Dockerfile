@@ -24,7 +24,7 @@ RUN apt-get update \
 WORKDIR /app
 
 RUN git clone --depth 1 --branch "${FSKINTRA_MCP_REF}" \
-  https://github.com/emilhein/fskintra-mcp.git .
+  https://github.com/emilhorlyck/fskintra-mcp.git .
 
 RUN bun install --frozen-lockfile --production
 

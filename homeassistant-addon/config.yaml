@@ -7,7 +7,7 @@ description: >-
   HA's Assist conversation agent (Anthropic / OpenAI / Ollama / …) can call,
   including via Voice. Point HA's official `mcp` (client) integration at
   http://homeassistant.local:7979/sse after install.
-url: "https://github.com/emilhein/fskintra-mcp"
+url: "https://github.com/emilhorlyck/fskintra-mcp"
 arch:
   - amd64
   - aarch64
