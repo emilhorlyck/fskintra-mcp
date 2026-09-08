@@ -6,10 +6,11 @@
  * state machine rather than a linear script because the site can interpose
  * pages in any order:
  *
- *   /Account/IdpLogin ──credentials POST──> SSO relay (auto-submit form)
- *          │                                        │
- *          │                                        ▼
- *          └──> /ConfirmContacts ──────────> /parent/<id>/<name>/Index
+ *   /Fi/ ──redirects──> /Account/IdpLogin ──credentials POST──> SSO relay
+ *                              │                        (auto-submit form)
+ *                              │                                 │
+ *                              │                                 ▼
+ *                              └──> /ConfirmContacts ──> /parent/<id>/<name>/Index
  *
  * Each round looks at where we landed and decides the next move. Bounded at
  * MAX_ROUNDS so a redirect cycle fails loudly instead of hanging.
@@ -24,6 +25,7 @@
  *     shareable, sanitised transcript.
  */
 
+import { isChildLink } from './child-link.ts';
 import {
   ConfirmContactsRequiredError,
   FskintraAuthError,
@@ -39,7 +41,32 @@ import type { StoredSessionRecord } from './session-store.ts';
 
 /** A logged-in front page looks like https://host/parent/1234/Andrea/Index */
 const INDEX_RE = /\/parent\/[^/]+\/[^/]*\/Index\/?$/i;
+
+/**
+ * Where to go when authentication worked but the page it returned to is a
+ * dead end. The site root is the installation's own answer to "where does
+ * this user belong": with the assertion already consumed it renders the front
+ * page directly, and if the session did not take it starts a fresh SAML round
+ * trip, which the loop below knows how to walk.
+ */
+const LANDING_FALLBACK = '/';
+
 const MAX_ROUNDS = 8;
+
+/**
+ * Ways into the parent flow, tried in order until one answers.
+ *
+ * `/Fi/` is ForældreIntra's own front door. It redirects via
+ * `/Infoweb/Fi2/Default.asp` to `csiproxy/login?roleType=Parent`, through the
+ * SAML IdP, and lands on a login form already stamped `RoleType=Parent` —
+ * often on the school's `.m.` host rather than the one the user typed.
+ *
+ * `/Account/IdpLogin` is where that chain ends, and some installations serve
+ * it directly on the school host. Others 404 it, which is what turned a
+ * perfectly ordinary login into "no ordinary login form at …". Asking for the
+ * front door first and the form second covers both.
+ */
+const ENTRY_PATHS = ['/Fi/', '/Account/IdpLogin'] as const;
 
 export interface LoginCredentials {
   /** Bare hostname, e.g. `minskole.skoleintra.dk`. A full URL is accepted. */
@@ -114,7 +141,7 @@ export class FskintraLoginClient {
       return undefined;
     }
 
-    if (response.status !== 200 || !INDEX_RE.test(new URL(response.url).pathname)) {
+    if (response.status !== 200 || !this.isFrontPage(parse(response.body), new URL(response.url))) {
       this.logger.info('login.resume_rejected', { url: response.url, status: response.status });
       return undefined;
     }
@@ -129,18 +156,10 @@ export class FskintraLoginClient {
   /** Full login from credentials. */
   async login(credentials: LoginCredentials): Promise<LoginResult> {
     const hostname = normalizeHostname(credentials.hostname);
-    const startUrl = this.absUrl(hostname, '/Account/IdpLogin');
     this.logger.info('login.start', { hostname, username: credentials.username });
 
-    let response: FskintraResponse;
-    try {
-      response = (await this.http.follow(startUrl)).final;
-    } catch (cause) {
-      throw new FskintraAuthError(
-        `Could not reach https://${hostname}. Check the hostname and your connection.`,
-        { cause },
-      );
-    }
+    let response = await this.openEntryPage(hostname);
+    const triedLandings = new Set<string>();
 
     for (let round = 0; round < MAX_ROUNDS; round++) {
       const doc = parse(response.body);
@@ -151,7 +170,7 @@ export class FskintraLoginClient {
         status: response.status,
       });
 
-      if (INDEX_RE.test(url.pathname) && response.body.length > 0) {
+      if (response.body.length > 0 && this.isFrontPage(doc, url)) {
         this.logger.info('login.success', { indexUrl: response.url });
         return {
           doc,
@@ -162,6 +181,19 @@ export class FskintraLoginClient {
 
       if (url.hostname.endsWith('emu.dk') || /unilogin/i.test(url.hostname)) {
         throw new UniLoginNotSupportedError(url.hostname);
+      }
+
+      // An error status this far in is not a failed login: the SAML assertion
+      // has been consumed and the session cookies are set. It means the return
+      // URL the flow carried around — `/Fi/`, usually — is not a page this
+      // installation serves. Ask the site where the user belongs instead.
+      if (response.status >= 400) {
+        const recovered = await this.followLandingFallback(response, hostname, triedLandings);
+        if (recovered) {
+          response = recovered;
+          continue;
+        }
+        break;
       }
 
       if (/\/ConfirmContacts\/?$/i.test(url.pathname)) {
@@ -201,13 +233,122 @@ export class FskintraLoginClient {
         continue;
       }
 
-      break;
+      // Nothing on this page is actionable and it is not the front page. Same
+      // recovery as the error case, for the installation that answers a dead
+      // return URL with a 200 and a page of chrome.
+      const recovered = await this.followLandingFallback(response, hostname, triedLandings);
+      if (!recovered) break;
+      response = recovered;
     }
 
     throw new FskintraAuthError(
       `Login did not reach the ForældreIntra front page after ${MAX_ROUNDS} rounds. ` +
         `Last URL: ${response.url}. Re-run with --debug for a wire transcript.`,
     );
+  }
+
+  /**
+   * Walk ENTRY_PATHS until one of them yields a page. A 404 means this
+   * installation does not have that door, not that login is impossible, so it
+   * is a reason to try the next path rather than to give up.
+   */
+  private async openEntryPage(hostname: string): Promise<FskintraResponse> {
+    const attempts: string[] = [];
+    let unreachable = 0;
+    let firstCause: unknown;
+
+    for (const path of ENTRY_PATHS) {
+      const url = this.absUrl(hostname, path);
+      let response: FskintraResponse;
+      try {
+        response = (await this.http.follow(url)).final;
+      } catch (cause) {
+        firstCause ??= cause;
+        unreachable += 1;
+        attempts.push(`${url} → ${(cause as Error).message}`);
+        this.logger.debug('login.entry_unreachable', { url, error: (cause as Error).message });
+        continue;
+      }
+
+      if (response.status === 404 || response.status >= 500) {
+        attempts.push(`${url} → HTTP ${response.status}`);
+        this.logger.debug('login.entry_missing', { url, status: response.status });
+        continue;
+      }
+
+      this.logger.debug('login.entry', {
+        url,
+        landedOn: response.url,
+        status: response.status,
+      });
+      return response;
+    }
+
+    // Two ways to have found no door, told apart by how they failed. Every
+    // path throwing at the transport level is a bad hostname or dead network;
+    // a mix of 404s and refusals is an installation that serves neither door,
+    // which is a layout we don't recognise. The messages must differ: the
+    // first points the user at their connection, the second at the URLs tried.
+    if (unreachable === ENTRY_PATHS.length) {
+      throw new FskintraAuthError(
+        `Could not reach https://${hostname}. Check the hostname and your connection.`,
+        { cause: firstCause },
+      );
+    }
+    throw new FskintraAuthError(
+      `No ForældreIntra login page on https://${hostname}. Tried:\n  ${attempts.join('\n  ')}`,
+      firstCause ? { cause: firstCause } : undefined,
+    );
+  }
+
+  /**
+   * Is this the logged-in front page? By URL first, by the child links it
+   * carries second. Both tests, rather than the URL alone, because the URL
+   * varies per installation and the links are what the page is *for*.
+   */
+  private isFrontPage(doc: Doc, url: URL): boolean {
+    if (INDEX_RE.test(url.pathname)) return true;
+    return doc('a[href]')
+      .toArray()
+      .some((el) => isChildLink(doc(el).attr('href')));
+  }
+
+  /**
+   * Retry a dead landing at the site root — first on the host we ended up on,
+   * then on the one the user typed, since the flow can change hosts. Each
+   * candidate is tried at most once per login, so a root that is itself a dead
+   * end fails the login instead of looping on it.
+   */
+  private async followLandingFallback(
+    from: FskintraResponse,
+    hostname: string,
+    tried: Set<string>,
+  ): Promise<FskintraResponse | undefined> {
+    const candidates = [
+      new URL(LANDING_FALLBACK, from.url).toString(),
+      this.absUrl(hostname, LANDING_FALLBACK),
+    ];
+
+    for (const candidate of candidates) {
+      if (tried.has(candidate)) continue;
+      tried.add(candidate);
+      this.logger.debug('login.landing_fallback', {
+        from: from.url,
+        status: from.status,
+        to: candidate,
+      });
+      try {
+        return (await this.http.follow(candidate)).final;
+      } catch (error) {
+        // A fallback that cannot be fetched is not the story. Keep the dead
+        // end we already have, so the error names it rather than the guess.
+        this.logger.debug('login.landing_fallback_failed', {
+          to: candidate,
+          error: (error as Error).message,
+        });
+      }
+    }
+    return undefined;
   }
 
   private async submitCredentials(

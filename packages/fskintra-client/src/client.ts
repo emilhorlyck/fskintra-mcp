@@ -15,6 +15,7 @@ import {
   defaultStore,
   FskintraHttpClient,
   FskintraLoginClient,
+  isChildLink,
   type Logger,
   NotLoggedInError,
   normalizeHostname,
@@ -51,9 +52,6 @@ export function credentialsFromEnv():
   if (!hostname || !username || !password) return undefined;
   return { hostname: normalizeHostname(hostname), username, password };
 }
-
-/** Links like /parent/1234/Andrea/Index — three path segments then /Index. */
-const CHILD_LINK_RE = /^(\/[^/]*){3}\/Index$/i;
 
 /** A response is really the login screen when it lands on one of these. */
 const LOGIN_PATH_RE = /\/Account\/(IdpLogin|Login)/i;
@@ -342,9 +340,9 @@ export function parseChildren(doc: Doc, absUrl: (url: string) => string): Child[
   const byPrefix = new Map<string, Child>();
   doc('a[href]').each((_, el) => {
     const href = doc(el).attr('href');
-    if (!href || !CHILD_LINK_RE.test(href)) return;
+    if (!href || !isChildLink(href)) return;
 
-    const urlPrefix = absUrl(href.replace(/\/Index$/i, ''));
+    const urlPrefix = absUrl(href.replace(/\/Index\/?$/i, ''));
     if (byPrefix.has(urlPrefix)) return;
 
     const name = doc(el).text().replace(/\s+/g, ' ').trim() || selectedName;
