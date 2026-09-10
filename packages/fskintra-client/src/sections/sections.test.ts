@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { parse } from '@fskintra-mcp/fskintra-auth';
+import { SectionParseError } from '../errors.ts';
 import { collectDocuments } from './documents.ts';
 import { findConversationsJson, messageFromJson, normalizeRecipients } from './messages.ts';
 import { parseFrontpage } from './news.ts';
@@ -148,33 +149,113 @@ describe('findConversationsJson', () => {
 });
 
 describe('parseWeekplan', () => {
-  const WEEK = `
-    <div class="sk-weekly-plan-container">
-      <h3>Uge 35</h3>
-      <li class="sk-weekly-plan-header">
-        <span class="sk-weekly-plan-day">Mandag</span>
-        <span class="sk-weekly-plan-date">27. aug.</span>
-      </li>
-      <li class="sk-weekly-plan-grid-cell"><ul><li>Dansk: læs side 12</li><li>Idræt</li></ul></li>
-      <li class="sk-weekly-plan-header">
-        <span class="sk-weekly-plan-day">Tirsdag</span>
-        <span class="sk-weekly-plan-date">28. aug.</span>
-      </li>
-      <li class="sk-weekly-plan-grid-cell"><ul><li>Matematik</li></ul></li>
-    </div>`;
+  // The weekly-plan detail page is a client-side Vue app: the day/lesson data
+  // is NOT in the server DOM, it is a JSON blob on
+  // `#root[data-clientlogic-settings-WeeklyPlansApp]`, which the browser
+  // renders. Shape and field names are taken from a real capture against
+  // steinerskolen-kvistgaard.m.skoleintra.dk (week 38-2026).
+  const appData = {
+    SelectedPlan: {
+      FormattedWeek: '38-2026',
+      ClassOrGroup: '01',
+      DailyPlans: [
+        {
+          Date: '2026-09-14',
+          Day: 'Mandag',
+          FormattedDate: '14. sep.',
+          LessonPlans: [
+            {
+              Subject: { Title: 'Dansk', FormattedTitle: 'Dansk' },
+              // Content is HTML with entities, exactly as the server sends it.
+              Content: '<p>Velkommen til Sarah&nbsp;&#128522;.</p>\n',
+              IsDraft: false,
+            },
+          ],
+        },
+        {
+          Date: '2026-09-15',
+          Day: 'Tirsdag',
+          FormattedDate: '15. sep.',
+          LessonPlans: [],
+        },
+        {
+          Date: '2026-09-16',
+          Day: 'Onsdag',
+          FormattedDate: '16. sep.',
+          LessonPlans: [
+            {
+              Subject: { Title: 'Matematik', FormattedTitle: 'Matematik' },
+              Content: '<p>L&aelig;s side 12</p>',
+              IsDraft: false,
+            },
+          ],
+        },
+      ],
+    },
+  };
 
-  test('pairs each header row with the content row that follows it', () => {
-    const plan = parseWeekplan(parse(WEEK), `https://${HOST}/plan/35-2018`);
-    expect(plan?.id).toBe('35-2018');
-    expect(plan?.title).toBe('Uge 35');
+  const detailPage = (data: unknown) =>
+    `<html><body><div id="root" data-clientlogic-settings-WeeklyPlansApp='${JSON.stringify(
+      data,
+    )}'></div></body></html>`;
+
+  test('reads the plan from the WeeklyPlansApp JSON, not the DOM', () => {
+    const plan = parseWeekplan(parse(detailPage(appData)), `https://${HOST}/x/item/class/38-2026`);
+    expect(plan?.id).toBe('38-2026');
     expect(plan?.days).toEqual([
-      { day: 'Mandag', date: '27. aug.', entries: ['Dansk: læs side 12', 'Idræt'] },
-      { day: 'Tirsdag', date: '28. aug.', entries: ['Matematik'] },
+      { day: 'Mandag', date: '14. sep.', entries: ['Dansk: Velkommen til Sarah 😊.'] },
+      { day: 'Tirsdag', date: '15. sep.', entries: [] },
+      { day: 'Onsdag', date: '16. sep.', entries: ['Matematik: Læs side 12'] },
     ]);
   });
 
-  test('returns undefined for a week with no plan', () => {
+  test('returns undefined when the page carries no WeeklyPlansApp data', () => {
     expect(parseWeekplan(parse('<html><body>tom</body></html>'), 'x')).toBeUndefined();
+  });
+
+  // Broken != empty: the attribute is present (so it should have parsed) but the
+  // JSON is malformed. That is a bug report, not an empty week — throw
+  // SectionParseError, matching how messages/contacts signal parse failure.
+  test('throws SectionParseError when the WeeklyPlansApp JSON is malformed', () => {
+    const page = `<div id="root" data-clientlogic-settings-WeeklyPlansApp='{not valid json'></div>`;
+    expect(() => parseWeekplan(parse(page), `https://${HOST}/x/item/class/9-2026`)).toThrow(
+      SectionParseError,
+    );
+  });
+
+  // A draft is a teacher's unpublished work-in-progress. A parent-facing,
+  // read-only view must not surface it.
+  test('filters out draft lessons', () => {
+    const data = {
+      SelectedPlan: {
+        FormattedWeek: '9-2026',
+        DailyPlans: [
+          {
+            Day: 'Mandag',
+            FormattedDate: '1. mar.',
+            LessonPlans: [
+              { Subject: { Title: 'Dansk' }, Content: '<p>udkast</p>', IsDraft: true },
+              { Subject: { Title: 'Matematik' }, Content: '<p>side 4</p>', IsDraft: false },
+            ],
+          },
+        ],
+      },
+    };
+    const plan = parseWeekplan(parse(detailPage(data)), `https://${HOST}/x/item/class/9-2026`);
+    expect(plan?.days[0]?.entries).toEqual(['Matematik: side 4']);
+  });
+
+  // When the payload lacks FormattedWeek, fall back to the list-level title
+  // rather than an empty string.
+  test('falls back to the list title when FormattedWeek is absent', () => {
+    const data = { SelectedPlan: { DailyPlans: [] } };
+    const plan = parseWeekplan(
+      parse(detailPage(data)),
+      `https://${HOST}/x/item/class/9-2026`,
+      'Plan for uge 9',
+    );
+    expect(plan?.title).toBe('Plan for uge 9');
+    expect(plan?.id).toBe('9-2026');
   });
 });
 

@@ -1,13 +1,14 @@
 /**
  * Weekly plans ("ugeplaner").
  *
- * Two hops: a list page of links, then one page per week whose grid alternates
- * header rows (day + date) with content rows (a `ul` of entries).
+ * Two hops: a list page of links, then one page per week. The list is
+ * server-rendered HTML; the per-week detail is a client-side Vue app whose
+ * data rides in a JSON blob on the page (see parseWeekplan).
  */
 
-import { clean, type Doc, textOf } from '@fskintra-mcp/fskintra-auth';
+import { clean, type Doc, htmlToText } from '@fskintra-mcp/fskintra-auth';
 import { childUrl, type FskintraClient } from '../client.ts';
-import { SectionUnavailableError } from '../errors.ts';
+import { SectionParseError, SectionUnavailableError } from '../errors.ts';
 import type { Child, Weekplan, WeekplanDay, WeekplanLink } from '../types.ts';
 
 export async function listWeekplans(client: FskintraClient, child: Child): Promise<WeekplanLink[]> {
@@ -41,39 +42,90 @@ export async function getWeekplan(
   return parseWeekplan(doc, url);
 }
 
-/** Pure parser. Returns undefined when the week simply has no plan. */
-export function parseWeekplan(doc: Doc, url: string): Weekplan | undefined {
-  const container = doc('div.sk-weekly-plan-container').first();
-  if (!container.length) return undefined;
+/**
+ * Pure parser. The weekly-plan detail page is a client-side Vue app: the day
+ * and lesson data is not in the server DOM but in a JSON blob on
+ * `#root[data-clientlogic-settings-WeeklyPlansApp]`, which the browser renders.
+ * We read that JSON directly rather than a browser (see docs/architecture.md).
+ *
+ * Returns undefined only when the page carries no such attribute at all (not a
+ * weekly-plan page). If the attribute IS present but its JSON is malformed, that
+ * is "should have been there" — a bug report — so it throws SectionParseError
+ * rather than masquerading as an empty week. `fallbackTitle` (the list-level
+ * title) is used when the payload omits FormattedWeek.
+ */
+export function parseWeekplan(doc: Doc, url: string, fallbackTitle = ''): Weekplan | undefined {
+  // cheerio lowercases attribute names, so read the lowercased form even
+  // though the server emits it CamelCased.
+  const raw = doc('[data-clientlogic-settings-weeklyplansapp]')
+    .first()
+    .attr('data-clientlogic-settings-weeklyplansapp');
+  if (!raw) return undefined;
 
-  const days: WeekplanDay[] = [];
-  let current: WeekplanDay | undefined;
+  let app: WeeklyPlansApp;
+  try {
+    app = JSON.parse(raw) as WeeklyPlansApp;
+  } catch (cause) {
+    throw new SectionParseError(
+      'ugeplaner (weekly plans)',
+      url,
+      `the WeeklyPlansApp payload was not valid JSON: ${(cause as Error).message}`,
+    );
+  }
 
-  container.find('.sk-weekly-plan-header, .sk-weekly-plan-grid-cell').each((_, el) => {
-    const node = doc(el);
-    if (node.hasClass('sk-weekly-plan-header')) {
-      current = {
-        day: clean(node.find('.sk-weekly-plan-day').text()),
-        date: clean(node.find('.sk-weekly-plan-date').text()),
-        entries: [],
-      };
-      days.push(current);
-      return;
-    }
-    if (!current) return;
-    const day = current;
-    node.find('li').each((__, li) => {
-      const text = textOf(doc, doc(li));
-      if (text) day.entries.push(text);
-    });
-  });
+  const selected = app.SelectedPlan;
+  if (!selected) {
+    throw new SectionParseError(
+      'ugeplaner (weekly plans)',
+      url,
+      'the WeeklyPlansApp payload had no SelectedPlan',
+    );
+  }
+
+  const days: WeekplanDay[] = (selected.DailyPlans ?? []).map((d) => ({
+    day: clean(d.Day),
+    // FormattedDate ("14. sep.") is what the app shows; fall back to the ISO date.
+    date: clean(d.FormattedDate || d.Date),
+    entries: (d.LessonPlans ?? [])
+      // Drafts are teacher work-in-progress, not published — never shown to a parent.
+      .filter((lesson) => !lesson.IsDraft)
+      .map((lesson) => lessonEntry(lesson))
+      .filter((e) => e.length > 0),
+  }));
 
   return {
-    id: url.replace(/\/$/, '').split('/').pop() ?? url,
-    title: clean(container.find('h3').first().text()),
+    id: selected.FormattedWeek || url.replace(/\/$/, '').split('/').pop() || url,
+    title: clean(selected.FormattedWeek ? `Uge ${selected.FormattedWeek}` : fallbackTitle),
     url,
     days,
   };
+}
+
+/** One lesson rendered as "Subject: content", or whichever half is present. */
+function lessonEntry(lesson: WeeklyPlanLesson): string {
+  const subject = clean(lesson.Subject?.Title ?? lesson.Subject?.FormattedTitle ?? '');
+  const body = clean(htmlToText(lesson.Content ?? ''));
+  if (subject && body) return `${subject}: ${body}`;
+  return subject || body;
+}
+
+/** Minimal shape of the WeeklyPlansApp JSON we depend on; the payload has more. */
+interface WeeklyPlansApp {
+  SelectedPlan?: {
+    FormattedWeek?: string;
+    DailyPlans?: Array<{
+      Day?: string;
+      Date?: string;
+      FormattedDate?: string;
+      LessonPlans?: WeeklyPlanLesson[];
+    }>;
+  };
+}
+
+interface WeeklyPlanLesson {
+  Subject?: { Title?: string; FormattedTitle?: string };
+  Content?: string;
+  IsDraft?: boolean;
 }
 
 /** The most recent `limit` weeks, fully fetched. */
@@ -85,8 +137,24 @@ export async function getWeekplans(
   const listed = await listWeekplans(client, child);
   const plans: Weekplan[] = [];
   for (const entry of listed.slice(0, limit)) {
-    const plan = await getWeekplan(client, entry.url);
-    if (plan) plans.push(plan);
+    const listFallback: Weekplan = { id: entry.id, title: entry.title, url: entry.url, days: [] };
+    try {
+      const doc = await client.fetchPage(entry.url);
+      // Pass the list title so a payload without FormattedWeek still gets a name.
+      const plan = parseWeekplan(doc, entry.url, entry.title);
+      // A missing attribute (undefined) means the detail wasn't a weekly-plan
+      // page; still surface the plan at list level rather than dropping it.
+      plans.push(plan ?? listFallback);
+    } catch (error) {
+      // A broken detail page (SectionParseError) must not take out the sibling
+      // weeks or vanish silently: surface the plan at list level, but let any
+      // other error (auth, network) propagate.
+      if (error instanceof SectionParseError) {
+        plans.push(listFallback);
+      } else {
+        throw error;
+      }
+    }
   }
   return plans;
 }
