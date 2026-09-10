@@ -8,6 +8,7 @@
  * without buying into MCP.
  */
 
+export { isChildLink } from './child-link.ts';
 export type { FskintraCookieJarOptions } from './cookies.ts';
 export { FskintraCookieJar } from './cookies.ts';
 export {

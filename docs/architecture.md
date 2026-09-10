@@ -202,6 +202,69 @@ instruction, and `FSKINTRA_MCP_AUTO_CONFIRM_CONTACTS=1` (or `fskintra login
 This is the same reflex as aula-mcp surfacing `AulaStepUpRequiredError` as
 structured JSON: an agent can act on "you must do X"; it cannot act on `[]`.
 
+### The login flow has more than one front door
+
+Login used to start at `https://<host>/Account/IdpLogin` and nowhere else. That
+is where the flow *ends*, and on a good number of installations the school host
+does not serve it at all — the request 404s and the state machine reports "no
+ordinary login form", which reads like markup drift and is actually a wrong URL.
+
+What those installations do serve is `/Fi/`, ForældreIntra's own front door. It
+redirects through `/Infoweb/Fi2/Default.asp` to
+`csiproxy/login?roleType=Parent` on the school's `.m.` host, bounces off the
+SAML IdP at `idp.m.skoleintra.dk`, and comes back to an `/Account/IdpLogin`
+form already stamped `RoleType=Parent`:
+
+```
+/Fi/ → /Infoweb/Fi2/Default.asp → <school>.m.skoleintra.dk/csiproxy/login?roleType=Parent
+     → idp.m.skoleintra.dk/sso/ssoservice?SAMLRequest=… → <school>.m.skoleintra.dk/Account/IdpLogin?role=Parent
+```
+
+So `ENTRY_PATHS` tries `/Fi/` first and `/Account/IdpLogin` second, treating any
+error status (a 404, but also a 403/410) as "not this door" rather than as
+failure. Asking for the front door first
+also gets the role right: entering at the school host's root would pick up
+`roleType=Teacher`, which is a login a parent cannot complete.
+
+Two consequences worth stating out loud. The credentials POST can land on a
+different host than the one the user typed, which is why the cookie jar is a
+real jar and redirects are followed by hand. And a login that finds no door
+anywhere reports every URL it tried with the status each returned, because the
+next school to break this will break it by moving the door again.
+
+### Authentication succeeding is not the same as landing somewhere
+
+The flow carries a return URL through the whole SAML exchange —
+`/Fi/`, typically, because that is the door it came in by. One school
+(`steinerskolen-kvistgaard.m.skoleintra.dk`) consumes the assertion, sets the
+session cookies, redirects to that return URL, and answers it with a bare IIS
+404. Every step worked. The parent simply does not live at `/Fi/` there:
+
+```
+POST /sso/assertionconsumerservice → 302 /Fi/   ← cookies set, login done
+GET  /Fi/                          → 404        ← the return URL is a fiction
+```
+
+Reported as "login did not reach the front page after 8 rounds", which is true
+and useless: it points at the credentials, and the credentials were fine.
+
+So a 4xx/5xx *after* the SSO exchange is not a failed login, and the state
+machine no longer treats it as one. It retries at the site root — first on the
+host it ended up on, then on the one the user typed, each at most once. The
+root is the installation's own answer to "where does this user belong": with
+the assertion already consumed it renders the front page directly, and if the
+session did not take it starts a fresh SAML round trip the loop can walk. A
+root that cannot be fetched is swallowed, so the error still names the dead end
+we actually found rather than the guess we made about it.
+
+That fallback only helps if the page it lands on is recognised, and matching
+`/parent/<id>/<name>/Index` on the URL is too narrow for a flow whose whole
+problem is that URLs move. A front page is now anything carrying child links
+(`/x/y/z/Index`) — which is precisely what the client scrapes off it a moment
+later, so the login's test for "am I there?" and the client's test for "is this
+usable?" are the same question. `resume()` uses it too; otherwise a session
+whose front page is at `/` would be re-logged-in on every single call.
+
 ### The relay check has to come before the login check
 
 The login state machine originally tested "am I on `/Account/IdpLogin`?" before
@@ -212,8 +275,12 @@ alone re-submits credentials into a form with no username field.
 The fix distinguishes an *explicit* relay (a form named `relay`, or a page under
 `/sso/ssocomplete` — the two shapes fskintra actually observed) from a lone
 unnamed form. Explicit relays are followed first; the generic single-form case
-is tried only after every known branch is ruled out, because the login page is
-also a lone form.
+is tried only after every known branch is ruled out — including the child-link
+front-page test, because a real ASP.NET front page wraps its whole body in one
+`<form>` and would otherwise be submitted back to the school. The generic relay
+is also never followed on an error status, where a stray form is a dead landing
+rather than a relay. The login page is a lone form too, which is the other
+reason this case comes last.
 
 ## Read-only by default
 

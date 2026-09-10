@@ -52,6 +52,32 @@ describe('parseChildren', () => {
     const children = parseChildren(parse(FRONT_PAGE), absUrl);
     expect(children.some((c) => c.urlPrefix.includes('/some/other'))).toBe(false);
   });
+
+  // Regression (review #6 follow-through): a child href may carry a query
+  // string. isChildLink accepts it, so parseChildren must strip the query when
+  // building the urlPrefix — a prefix ending in `?SchoolId=3` breaks every
+  // section URL derived from it.
+  test('strips a query string from the child urlPrefix', () => {
+    const page = `
+      <html><body>
+        <a href="/parent/1234/Andrea/Index?SchoolId=3">Andrea 3A</a>
+      </body></html>`;
+    const children = parseChildren(parse(page), absUrl);
+    expect(children).toHaveLength(1);
+    expect(children[0]?.urlPrefix).toBe(`https://${HOST}/parent/1234/Andrea`);
+    expect(children[0]?.id).toBe('1234');
+  });
+
+  // Regression (review nit): a query with an embedded newline must still be
+  // stripped, matching isChildLink's split, so the prefix is never malformed.
+  test('strips a query containing a newline from the child urlPrefix', () => {
+    const page = `
+      <html><body>
+        <a href="/parent/1234/Andrea/Index?a=1&#10;b=2">Andrea 3A</a>
+      </body></html>`;
+    const children = parseChildren(parse(page), absUrl);
+    expect(children[0]?.urlPrefix).toBe(`https://${HOST}/parent/1234/Andrea`);
+  });
 });
 
 describe('childUrl', () => {
