@@ -1,13 +1,14 @@
 /**
  * Weekly plans ("ugeplaner").
  *
- * Two hops: a list page of links, then one page per week whose grid alternates
- * header rows (day + date) with content rows (a `ul` of entries).
+ * Two hops: a list page of links, then one page per week. The list is
+ * server-rendered HTML; the per-week detail is a client-side Vue app whose
+ * data rides in a JSON blob on the page (see parseWeekplan).
  */
 
-import { clean, type Doc, textOf } from '@fskintra-mcp/fskintra-auth';
+import { clean, type Doc, htmlToText } from '@fskintra-mcp/fskintra-auth';
 import { childUrl, type FskintraClient } from '../client.ts';
-import { SectionUnavailableError } from '../errors.ts';
+import { SectionParseError, SectionUnavailableError } from '../errors.ts';
 import type { Child, Weekplan, WeekplanDay, WeekplanLink } from '../types.ts';
 
 export async function listWeekplans(client: FskintraClient, child: Child): Promise<WeekplanLink[]> {
@@ -41,39 +42,116 @@ export async function getWeekplan(
   return parseWeekplan(doc, url);
 }
 
-/** Pure parser. Returns undefined when the week simply has no plan. */
-export function parseWeekplan(doc: Doc, url: string): Weekplan | undefined {
-  const container = doc('div.sk-weekly-plan-container').first();
-  if (!container.length) return undefined;
+/**
+ * Pure parser. The weekly-plan detail page is a client-side Vue app: the day
+ * and lesson data is not in the server DOM but in a JSON blob on
+ * `#root[data-clientlogic-settings-WeeklyPlansApp]`, which the browser renders.
+ * We read that JSON directly rather than a browser (see docs/architecture.md).
+ *
+ * Returns undefined only when the page carries no such attribute at all (not a
+ * weekly-plan page). If the attribute IS present but its JSON is malformed, that
+ * is "should have been there" — a bug report — so it throws SectionParseError
+ * rather than masquerading as an empty week. `fallbackTitle` (the list-level
+ * title) is used when the payload omits FormattedWeek.
+ */
+export function parseWeekplan(doc: Doc, url: string, fallbackTitle = ''): Weekplan | undefined {
+  // cheerio lowercases attribute names, so read the lowercased form even
+  // though the server emits it CamelCased.
+  const raw = doc('[data-clientlogic-settings-weeklyplansapp]')
+    .first()
+    .attr('data-clientlogic-settings-weeklyplansapp');
+  if (!raw) return undefined;
 
-  const days: WeekplanDay[] = [];
-  let current: WeekplanDay | undefined;
+  let app: WeeklyPlansApp;
+  try {
+    app = JSON.parse(raw) as WeeklyPlansApp;
+  } catch (cause) {
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    throw new SectionParseError(
+      'ugeplaner (weekly plans)',
+      url,
+      `the WeeklyPlansApp payload was not valid JSON: ${detail}`,
+    );
+  }
 
-  container.find('.sk-weekly-plan-header, .sk-weekly-plan-grid-cell').each((_, el) => {
-    const node = doc(el);
-    if (node.hasClass('sk-weekly-plan-header')) {
-      current = {
-        day: clean(node.find('.sk-weekly-plan-day').text()),
-        date: clean(node.find('.sk-weekly-plan-date').text()),
-        entries: [],
-      };
-      days.push(current);
-      return;
+  const selected = app.SelectedPlan;
+  if (!selected) {
+    throw new SectionParseError(
+      'ugeplaner (weekly plans)',
+      url,
+      'the WeeklyPlansApp payload had no SelectedPlan',
+    );
+  }
+
+  // Valid JSON with a wrong-shaped field (e.g. DailyPlans as an object, or a
+  // day's LessonPlans as a string) is "broken", not "empty": guard array-ness
+  // and raise the typed error rather than letting a raw TypeError escape the
+  // SectionParseError contract that getWeekplans relies on to isolate a week.
+  const dailyPlans = selected.DailyPlans ?? [];
+  if (!Array.isArray(dailyPlans)) {
+    throw new SectionParseError('ugeplaner (weekly plans)', url, 'DailyPlans was not an array');
+  }
+
+  const days: WeekplanDay[] = dailyPlans.map((d) => {
+    const lessons = d.LessonPlans ?? [];
+    if (!Array.isArray(lessons)) {
+      throw new SectionParseError('ugeplaner (weekly plans)', url, 'LessonPlans was not an array');
     }
-    if (!current) return;
-    const day = current;
-    node.find('li').each((__, li) => {
-      const text = textOf(doc, doc(li));
-      if (text) day.entries.push(text);
-    });
+    return {
+      day: clean(d.Day),
+      // FormattedDate ("14. sep.") is what the app shows; fall back to the ISO date.
+      date: clean(d.FormattedDate || d.Date),
+      entries: lessons
+        // Drafts are teacher work-in-progress, not published — never shown to a
+        // parent. An absent IsDraft is treated as published (shown): the server
+        // only sets the flag on actual drafts.
+        .filter((lesson) => !lesson.IsDraft)
+        .map((lesson) => lessonEntry(lesson))
+        .filter((e) => e.length > 0),
+    };
   });
 
   return {
-    id: url.replace(/\/$/, '').split('/').pop() ?? url,
-    title: clean(container.find('h3').first().text()),
+    id: selected.FormattedWeek || url.replace(/\/$/, '').split('/').pop() || url,
+    title: clean(selected.FormattedWeek ? `Uge ${selected.FormattedWeek}` : fallbackTitle),
     url,
     days,
   };
+}
+
+/** One lesson rendered as "Subject: content", or whichever half is present. */
+function lessonEntry(lesson: WeeklyPlanLesson): string {
+  const subject = clean(lesson.Subject?.Title ?? lesson.Subject?.FormattedTitle ?? '');
+  const body = clean(htmlToText(lesson.Content ?? ''));
+  if (subject && body) return `${subject}: ${body}`;
+  return subject || body;
+}
+
+/**
+ * Minimal shape of the WeeklyPlansApp JSON we depend on; the payload has more.
+ * This is a parse-boundary DTO over an untrusted, variable server payload, so
+ * fields are widened to allow the wrong shape (e.g. a non-array DailyPlans) —
+ * parseWeekplan validates array-ness and raises SectionParseError, rather than
+ * trusting the JSON.parse cast and crashing on .map.
+ */
+interface WeeklyPlansApp {
+  SelectedPlan?: {
+    FormattedWeek?: string;
+    DailyPlans?: WeeklyPlanDay[] | unknown;
+  };
+}
+
+interface WeeklyPlanDay {
+  Day?: string;
+  Date?: string;
+  FormattedDate?: string;
+  LessonPlans?: WeeklyPlanLesson[] | unknown;
+}
+
+interface WeeklyPlanLesson {
+  Subject?: { Title?: string; FormattedTitle?: string };
+  Content?: string;
+  IsDraft?: boolean;
 }
 
 /** The most recent `limit` weeks, fully fetched. */
@@ -85,8 +163,41 @@ export async function getWeekplans(
   const listed = await listWeekplans(client, child);
   const plans: Weekplan[] = [];
   for (const entry of listed.slice(0, limit)) {
-    const plan = await getWeekplan(client, entry.url);
-    if (plan) plans.push(plan);
+    // Marked partial so the boundary never presents a broken/unloaded week as a
+    // genuinely empty one.
+    const listFallback: Weekplan = {
+      id: entry.id,
+      title: entry.title,
+      url: entry.url,
+      days: [],
+      partial: true,
+    };
+    try {
+      const doc = await client.fetchPage(entry.url);
+      // Pass the list title so a payload without FormattedWeek still gets a name.
+      const plan = parseWeekplan(doc, entry.url, entry.title);
+      if (!plan) {
+        // A listed week whose detail carries no WeeklyPlansApp attribute is an
+        // anomaly worth recording, not a silent empty week.
+        client.logger.warn('weekplans.detail_not_a_plan', { url: entry.url });
+        plans.push(listFallback);
+      } else {
+        plans.push(plan);
+      }
+    } catch (error) {
+      // A broken detail page (SectionParseError) must not take out the sibling
+      // weeks or vanish silently: record why, surface the plan at list level
+      // (flagged partial), and let any other error (auth, network) propagate.
+      if (error instanceof SectionParseError) {
+        client.logger.warn('weekplans.detail_parse_failed', {
+          url: entry.url,
+          detail: error.message,
+        });
+        plans.push(listFallback);
+      } else {
+        throw error;
+      }
+    }
   }
   return plans;
 }
