@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { MemorySessionStore, parse } from '@fskintra-mcp/fskintra-auth';
 import { childUrl, credentialsFromEnv, FskintraClient, parseChildren } from './client.ts';
+import { getWeekplans } from './sections/weekplans.ts';
 
 const realFetch = globalThis.fetch;
 afterEach(() => {
@@ -223,5 +224,93 @@ describe('FskintraClient.resolveChild', () => {
     const c = await client();
     expect(c.resolveChild()).rejects.toThrow(/Andrea 3A, Bertil 6B/);
     expect(c.resolveChild('Christian')).rejects.toThrow(/Known: Andrea 3A, Bertil 6B/);
+  });
+});
+
+describe('getWeekplans (aggregator)', () => {
+  const PREFIX = `https://${HOST}/parent/1234/Andrea`;
+  const LIST_URL = `${PREFIX}item/weeklyplansandhomework/list/`;
+  const WEEK_A = `${PREFIX}item/weeklyplansandhomework/item/class/38-2026`;
+  const WEEK_B = `${PREFIX}item/weeklyplansandhomework/item/class/37-2026`;
+  const child = { name: 'Andrea 3A', id: '1234', urlPrefix: PREFIX };
+
+  const LIST_PAGE = `
+    <html><body><ul class="sk-list ${'sk-'}weekly-plans-list-container">
+      <li><a href="/parent/1234/Andreaitem/weeklyplansandhomework/item/class/38-2026">Plan A</a></li>
+      <li><a href="/parent/1234/Andreaitem/weeklyplansandhomework/item/class/37-2026">Plan B</a></li>
+    </ul></body></html>`;
+
+  const detailPage = (data: unknown) =>
+    `<html><body><div id="root" data-clientlogic-settings-WeeklyPlansApp='${JSON.stringify(
+      data,
+    )}'></div></body></html>`;
+
+  const goodPlan = {
+    SelectedPlan: {
+      FormattedWeek: '38-2026',
+      DailyPlans: [{ Day: 'Mandag', FormattedDate: '14. sep.', LessonPlans: [] }],
+    },
+  };
+
+  // The central claim of the fix: a broken week is surfaced at list level
+  // (flagged partial) and does NOT take out its sibling weeks.
+  test('surfaces a broken week as partial without dropping its siblings', async () => {
+    stub((key) => {
+      if (key === `GET ${INDEX}`) return { body: FRONT_PAGE };
+      if (key === `GET ${LIST_URL}`) return { body: LIST_PAGE };
+      if (key === `GET ${WEEK_A}`) return { body: detailPage(goodPlan) };
+      // Week B is present-but-malformed JSON -> parseWeekplan throws SectionParseError.
+      if (key === `GET ${WEEK_B}`)
+        return { body: `<div id="root" data-clientlogic-settings-WeeklyPlansApp='{bad'></div>` };
+      throw new Error(`No stub for ${key}`);
+    });
+
+    const c = new FskintraClient({ store: await seededStore() });
+    const plans = await getWeekplans(c, child);
+
+    expect(plans).toHaveLength(2);
+    expect(plans[0]?.id).toBe('38-2026');
+    expect(plans[0]?.partial).toBeUndefined();
+    // The broken sibling survived as a partial list-level plan, not dropped.
+    expect(plans[1]?.id).toBe('37-2026');
+    expect(plans[1]?.partial).toBe(true);
+    expect(plans[1]?.days).toEqual([]);
+  });
+
+  // A detail page with no WeeklyPlansApp attribute is not a weekly-plan page:
+  // still surfaced (partial), never silently dropped.
+  test('surfaces a week whose detail has no plan attribute as partial', async () => {
+    stub((key) => {
+      if (key === `GET ${INDEX}`) return { body: FRONT_PAGE };
+      if (key === `GET ${LIST_URL}`) return { body: LIST_PAGE };
+      if (key === `GET ${WEEK_A}`) return { body: detailPage(goodPlan) };
+      if (key === `GET ${WEEK_B}`) return { body: '<html><body>ingen plan her</body></html>' };
+      throw new Error(`No stub for ${key}`);
+    });
+
+    const c = new FskintraClient({ store: await seededStore() });
+    const plans = await getWeekplans(c, child);
+
+    expect(plans.map((p) => p.id)).toEqual(['38-2026', '37-2026']);
+    expect(plans[1]?.partial).toBe(true);
+  });
+
+  // Auth/network failures are NOT a broken-week: they must propagate, not be
+  // masked as a partial empty week.
+  test('propagates a non-parse error (expired session) instead of masking it', async () => {
+    stub((key) => {
+      if (key === `GET ${INDEX}`) return { body: FRONT_PAGE };
+      if (key === `GET ${LIST_URL}`) return { body: LIST_PAGE };
+      if (key === `GET ${WEEK_A}`) return { body: detailPage(goodPlan) };
+      // Week B keeps bouncing to the login screen -> SessionExpiredError.
+      if (key === `GET ${WEEK_B}`)
+        return { status: 302, location: `https://${HOST}/Account/IdpLogin` };
+      if (key === `GET https://${HOST}/Account/IdpLogin`) return { body: LOGIN_PAGE };
+      if (key === `POST https://${HOST}/Account/IdpLogin`) return { status: 302, location: INDEX };
+      throw new Error(`No stub for ${key}`);
+    });
+
+    const c = new FskintraClient({ store: await seededStore() });
+    expect(getWeekplans(c, child)).rejects.toThrow(/session expired/i);
   });
 });

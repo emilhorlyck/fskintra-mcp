@@ -77,6 +77,13 @@ export interface Weekplan {
   title: string;
   url: string;
   days: WeekplanDay[];
+  /**
+   * True when this plan could not be fully loaded — the detail page was broken
+   * or absent, so only the list-level title/link is present and `days` is empty
+   * for that reason (not because the week is genuinely empty). Distinguishes
+   * "broken/unloaded" from a real empty week at the output boundary.
+   */
+  partial?: true;
 }
 
 export interface WeekplanLink {

@@ -59,7 +59,8 @@ const LOGIN_PATH_RE = /\/Account\/(IdpLogin|Login)/i;
 export class FskintraClient {
   readonly http: FskintraHttpClient;
   private readonly store: SessionStore;
-  private readonly logger: Logger;
+  /** Public so section modules can record swallowed, non-fatal failures. */
+  readonly logger: Logger;
   private readonly login: FskintraLoginClient;
   private readonly overrideCredentials: FskintraClientOptions['credentials'];
 

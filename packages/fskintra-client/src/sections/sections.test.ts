@@ -245,6 +245,28 @@ describe('parseWeekplan', () => {
     expect(plan?.days[0]?.entries).toEqual(['Matematik: side 4']);
   });
 
+  // Broken != empty (part 2): valid JSON but a field is the wrong shape — a
+  // realistic server-side API drift. An unguarded .map/.filter would throw a
+  // raw TypeError that escapes the SectionParseError contract; guard it.
+  test('throws SectionParseError when DailyPlans is not an array', () => {
+    const data = { SelectedPlan: { FormattedWeek: '9-2026', DailyPlans: { nope: 1 } } };
+    expect(() =>
+      parseWeekplan(parse(detailPage(data)), `https://${HOST}/x/item/class/9-2026`),
+    ).toThrow(SectionParseError);
+  });
+
+  test('throws SectionParseError when a day LessonPlans is not an array', () => {
+    const data = {
+      SelectedPlan: {
+        FormattedWeek: '9-2026',
+        DailyPlans: [{ Day: 'Mandag', FormattedDate: '1. mar.', LessonPlans: 'oops' }],
+      },
+    };
+    expect(() =>
+      parseWeekplan(parse(detailPage(data)), `https://${HOST}/x/item/class/9-2026`),
+    ).toThrow(SectionParseError);
+  });
+
   // When the payload lacks FormattedWeek, fall back to the list-level title
   // rather than an empty string.
   test('falls back to the list title when FormattedWeek is absent', () => {
