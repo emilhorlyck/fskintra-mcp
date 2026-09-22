@@ -1,6 +1,6 @@
 {
   "name": "@fskintra-mcp/fskintra-auth",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "ForældreIntra login flow, cookie jar, wire tracing and the encrypted session store. Pure HTTP, no headless browser.",
   "license": "MIT",
